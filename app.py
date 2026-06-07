@@ -889,9 +889,21 @@ def execute_ai_tool(name: str, arguments: dict[str, Any]) -> dict[str, object]:
     return {"error": f"未知工具：{name}"}
 
 
+def get_deepseek_api_key() -> str:
+    """优先读取环境变量，其次读取 Streamlit Cloud Secrets。"""
+    env_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+    if env_key:
+        return env_key
+    try:
+        secret_key = st.secrets.get("DEEPSEEK_API_KEY", "")
+    except Exception:
+        secret_key = ""
+    return str(secret_key).strip()
+
+
 def call_deepseek(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """调用 DeepSeek OpenAI 兼容聊天接口。"""
-    api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+    api_key = get_deepseek_api_key()
     if not api_key:
         raise RuntimeError("未设置环境变量 DEEPSEEK_API_KEY。")
 
@@ -978,7 +990,7 @@ def run_ai_turn(user_text: str) -> str:
 
 def render_ai_tab() -> None:
     """DeepSeek 对话助手标签页。"""
-    api_key_ready = bool(os.getenv("DEEPSEEK_API_KEY", "").strip())
+    api_key_ready = bool(get_deepseek_api_key())
     st.markdown(
         f"""
         <div class="ai-note">

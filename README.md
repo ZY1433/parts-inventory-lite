@@ -133,6 +133,32 @@ streamlit run app.py
 
 AI 助手会通过本地工具调用读写 SQLite 库存。导入时请检查数量，尤其是订单文本没有写清“每包多少只”的情况。
 
+## 部署到 Streamlit Community Cloud
+
+先把代码推送到 GitHub，然后在 Streamlit Community Cloud 中创建应用。
+
+部署参数：
+
+```text
+Repository: ZY1433/parts-inventory-lite
+Branch: main
+Main file path: app.py
+```
+
+如果要使用 AI 助手，在应用的 Secrets 中添加：
+
+```toml
+DEEPSEEK_API_KEY = "你的 DeepSeek API Key"
+```
+
+如果页面提示代码没有连接到远程 GitHub 仓库，请确认：
+
+- GitHub 仓库已经存在并且当前分支已 push
+- Streamlit Cloud 里选择的是 `ZY1433/parts-inventory-lite`
+- 分支选择 `main`
+- 主文件路径填写 `app.py`
+- 如果本地 Streamlit 页面开着，push 后重启一次本地应用再点部署
+
 ## CSV 导入格式
 
 CSV 使用中文表头。至少需要包含：
