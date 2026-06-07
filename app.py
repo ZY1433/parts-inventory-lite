@@ -67,6 +67,8 @@ MAIN_TABLE_COLUMNS = [
 ]
 
 CSV_REQUIRED_COLUMNS = ["类别", "名称", "数量"]
+BOM_REQUIRED_COLUMNS = ["Comment", "Designator", "Footprint"]
+BOM_CONTEXT_ROW_LIMIT = 300
 
 AI_SYSTEM_PROMPT = f"""
 你是一个中文电子元件库存助手，帮助用户管理本地 SQLite 库存。
@@ -79,6 +81,7 @@ AI_SYSTEM_PROMPT = f"""
 5. 如果订单文本没有写每包数量，可以在 notes 里写明“数量为推断”，不要装作确定。
 6. 分析项目缺什么时，先根据用户项目列出可能需要的元件，再结合库存查询结果判断“已有、数量不足、缺少、不确定”。
 7. 回答保持简洁中文，说明你调用工具后的结论。
+8. 如果用户输入中附带“BOM xlsx 解析结果”，优先把这些 Comment、Designator、Footprint 当作项目物料清单来分析。
 
 库存类别只能使用：{", ".join(CATEGORIES)}。
 购买来源只能使用：{", ".join(SOURCES)}。
@@ -769,6 +772,72 @@ def render_import_export_tab(df: pd.DataFrame) -> None:
                 st.warning(message)
 
 
+def normalize_column_name(value: object) -> str:
+    """标准化列名，便于匹配 Excel 中大小写或空格略有差异的表头。"""
+    return normalize_text(value).lower().replace(" ", "").replace("_", "")
+
+
+def parse_bom_xlsx(uploaded_file) -> tuple[pd.DataFrame | None, str, str]:
+    """解析 BOM xlsx 中的 Comment、Designator、Footprint 三列。"""
+    try:
+        bom_df = pd.read_excel(uploaded_file, sheet_name=0, dtype=str, engine="openpyxl")
+    except ImportError:
+        return (
+            None,
+            "",
+            "缺少 openpyxl，无法读取 xlsx。请先运行：pip install -r requirements.txt，然后重启 Streamlit。",
+        )
+    except Exception as exc:
+        return None, "", f"读取 xlsx 失败：{exc}"
+
+    column_lookup = {normalize_column_name(column): column for column in bom_df.columns}
+    matched_columns: dict[str, str] = {}
+    for required_column in BOM_REQUIRED_COLUMNS:
+        normalized = normalize_column_name(required_column)
+        if normalized not in column_lookup:
+            return (
+                None,
+                "",
+                f"缺少必要列：{required_column}。请确认 BOM 表里有 Comment、Designator、Footprint 三列。",
+            )
+        matched_columns[required_column] = column_lookup[normalized]
+
+    parsed_df = bom_df[[matched_columns[column] for column in BOM_REQUIRED_COLUMNS]].copy()
+    parsed_df.columns = BOM_REQUIRED_COLUMNS
+    parsed_df = parsed_df.fillna("").map(normalize_text)
+    parsed_df = parsed_df[
+        (parsed_df["Comment"] != "")
+        | (parsed_df["Designator"] != "")
+        | (parsed_df["Footprint"] != "")
+    ]
+
+    if parsed_df.empty:
+        return parsed_df, "", "BOM 文件里没有可用的 Comment、Designator、Footprint 数据。"
+
+    limited_df = parsed_df.head(BOM_CONTEXT_ROW_LIMIT)
+    lines = [
+        "以下是用户上传的 BOM xlsx 解析结果，只包含 Comment、Designator、Footprint 三列："
+    ]
+    if len(parsed_df) > BOM_CONTEXT_ROW_LIMIT:
+        lines.append(
+            f"注意：BOM 共 {len(parsed_df)} 行，本次只附上前 {BOM_CONTEXT_ROW_LIMIT} 行。"
+        )
+    for row in limited_df.itertuples(index=False):
+        lines.append(
+            f"Comment: {row.Comment}; Designator: {row.Designator}; Footprint: {row.Footprint}"
+        )
+
+    return parsed_df, "\n".join(lines), ""
+
+
+def build_ai_user_text(user_text: str) -> str:
+    """把用户输入和已上传的 BOM 解析结果一起发给模型。"""
+    bom_context = st.session_state.get("bom_context_text", "")
+    if not bom_context:
+        return user_text
+    return f"{user_text}\n\n{bom_context}"
+
+
 def inventory_records_for_ai(df: pd.DataFrame, limit: int) -> list[dict[str, object]]:
     """把库存记录转换成模型容易阅读的 JSON 数据。"""
     if df.empty:
@@ -935,15 +1004,24 @@ def call_deepseek(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | 
         raise RuntimeError(f"DeepSeek API 网络错误：{exc.reason}") from exc
 
 
-def run_ai_turn(user_text: str) -> str:
+def run_ai_turn(user_text: str, display_text: str | None = None) -> str:
     """执行一轮 AI 对话，并处理可能出现的工具调用。"""
     if "ai_messages" not in st.session_state:
         st.session_state.ai_messages = []
 
-    st.session_state.ai_messages.append({"role": "user", "content": user_text})
+    st.session_state.ai_messages.append(
+        {
+            "role": "user",
+            "content": user_text,
+            "display_content": display_text or user_text,
+        }
+    )
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": AI_SYSTEM_PROMPT},
-        *st.session_state.ai_messages,
+        *[
+            {"role": message["role"], "content": message["content"]}
+            for message in st.session_state.ai_messages
+        ],
     ]
 
     tool_logs: list[str] = []
@@ -1017,10 +1095,40 @@ def render_ai_tab() -> None:
         st.session_state.ai_messages = []
     if "last_ai_tool_logs" not in st.session_state:
         st.session_state.last_ai_tool_logs = []
+    if "bom_context_text" not in st.session_state:
+        st.session_state.bom_context_text = ""
+    if "bom_preview" not in st.session_state:
+        st.session_state.bom_preview = None
+
+    st.subheader("上传 BOM xlsx")
+    bom_file = st.file_uploader(
+        "上传 BOM 文件，要求包含 Comment、Designator、Footprint 三列",
+        type=["xlsx"],
+        key="ai_bom_xlsx",
+    )
+    if bom_file is not None:
+        parsed_df, bom_context_text, error = parse_bom_xlsx(bom_file)
+        if error:
+            st.session_state.bom_context_text = ""
+            st.session_state.bom_preview = None
+            st.warning(error)
+        elif parsed_df is not None:
+            st.session_state.bom_context_text = bom_context_text
+            st.session_state.bom_preview = parsed_df
+            st.success(f"已解析 {len(parsed_df)} 行 BOM。发送问题时会自动把解析结果一起发给 DeepSeek。")
+            st.dataframe(parsed_df.head(30), use_container_width=True, hide_index=True)
+            if len(parsed_df) > 30:
+                st.caption(f"这里只预览前 30 行，实际会发送前 {BOM_CONTEXT_ROW_LIMIT} 行解析结果。")
+
+    if st.session_state.bom_context_text:
+        if st.button("清除已解析的 BOM"):
+            st.session_state.bom_context_text = ""
+            st.session_state.bom_preview = None
+            st.rerun()
 
     for message in st.session_state.ai_messages:
         with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+            st.markdown(message.get("display_content", message["content"]))
 
     examples = st.expander("可以这样问")
     examples.markdown(
@@ -1034,15 +1142,18 @@ def render_ai_tab() -> None:
 
     user_text = st.chat_input("和库存助手对话，或粘贴订单文本让它导入")
     if user_text:
+        model_user_text = build_ai_user_text(user_text)
         with st.chat_message("user"):
             st.markdown(user_text)
+            if st.session_state.get("bom_context_text"):
+                st.caption("已附带上传的 BOM xlsx 解析结果。")
         with st.chat_message("assistant"):
             if not api_key_ready:
                 st.error("缺少 DEEPSEEK_API_KEY，无法调用 DeepSeek。")
                 return
             with st.spinner("DeepSeek 正在读取库存并思考..."):
                 try:
-                    answer = run_ai_turn(user_text)
+                    answer = run_ai_turn(model_user_text, display_text=user_text)
                 except Exception as exc:
                     answer = f"调用失败：{exc}"
                     st.session_state.ai_messages.append({"role": "assistant", "content": answer})

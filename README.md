@@ -14,7 +14,7 @@
 - 支持 CSV 导入和一键导出
 - 支持 DeepSeek 对话助手
 - 可以粘贴淘宝、立创等订单文本，让模型帮你整理并导入库存
-- 可以粘贴 BOM 或项目需求，让模型结合当前库存判断缺什么
+- 可以上传 BOM `.xlsx`，或粘贴 BOM 文本，让模型结合当前库存判断缺什么
 - 个人使用场景下 token 量很小，调用成本通常很低，实际费用以 DeepSeek 计费为准
 
 ## DeepSeek 能帮什么
@@ -23,7 +23,7 @@
 
 你不用手动把订单标题一点点拆成“类别、名称、参数、封装、数量”。把订单文本粘进去，说一句“导入库存”，DeepSeek 会尽量抽取元件信息，再通过本地工具写入 SQLite。
 
-你也可以把一个项目的 BOM 贴进去，比如：
+你也可以上传一个 BOM `.xlsx` 文件，应用会先用代码解析 `Comment`、`Designator`、`Footprint` 三列，再把解析结果连同你的问题一起发给 DeepSeek。没有表格文件时，也可以直接粘贴 BOM 文本，比如：
 
 ```text
 这些元件我差哪些：
@@ -53,12 +53,11 @@ KH-TYPEC-16P USB1 USB-TYPEC-16P
 
 ## 目前还没做
 
-现在 AI 助手主要处理文本。下面两个能力还在计划里：
+现在 BOM `.xlsx` 已经可以上传，但订单截图识别还在计划里：
 
-- 直接上传 BOM 的 `.xlsx` 文件，让模型读取表格后判断缺件
 - 直接上传淘宝订单截图，让模型识别图片内容并导入库存
 
-也就是说，当前版本更适合粘贴订单文本、BOM 文本或手动导入 CSV。图片识别和 Excel BOM 直传还不是已完成能力。
+也就是说，当前版本适合上传 BOM `.xlsx`、粘贴 BOM 文本、粘贴订单文本或手动导入 CSV。图片识别还不是已完成能力。
 
 ## 功能
 
@@ -154,7 +153,7 @@ DEEPSEEK_API_KEY = "你的 DeepSeek API Key"
 
 ## CSV 导入
 
-CSV 导入保留得很简单。至少需要这三列：
+项目也支持csv直接导入，但是要按照格式，至少需要这三列：
 
 ```csv
 类别,名称,数量
@@ -176,20 +175,6 @@ CSV 导入保留得很简单。至少需要这三列：
 在 `导入导出` 标签页点击 `一键导出 CSV`，就可以把当前库存导出成 CSV。导出使用 UTF-8 with BOM，方便在 Windows 上用 Excel 打开中文。
 
 DeepSeek 本身不会替你把文件下载到本地，但它可以帮你盘点库存、整理缺件清单，再配合 CSV 导出做记录。
-
-## 部署到 Streamlit Community Cloud
-
-把代码推到 GitHub 后，在 Streamlit Community Cloud 里创建应用。
-
-部署参数：
-
-```text
-Repository: ZY1433/parts-inventory-lite
-Branch: main
-Main file path: app.py
-```
-
-如果要使用 AI 助手，记得在 Secrets 里填 `DEEPSEEK_API_KEY`。
 
 ## 项目结构
 
